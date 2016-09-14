@@ -1,0 +1,6 @@
+{
+    "PG_URL": "postgres://<account>:<password>@<host>/<db>",
+    "limit": 200,
+    "prev_num": 5,
+    "post_num": 5
+}

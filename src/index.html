@@ -1,0 +1,245 @@
+<!doctype html>
+<html>
+  <head>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
+    <link rel="stylesheet" href="https://code.getmdl.io/1.2.0/material.red-blue.min.css" />
+    <title>PROCESS WARP : log analyzer</title>
+    <script defer src="https://code.getmdl.io/1.2.0/material.min.js"></script>
+    <script src="https://cdn.socket.io/socket.io-1.2.0.js"></script>
+    <script src="https://code.jquery.com/jquery-3.1.0.min.js"
+            integrity="sha256-cCueBR6CsyA4/9szpPfrX3s49M9vUU5BgtiJj06wt/s=" crossorigin="anonymous"></script>
+  </head>
+  <body>
+    <div class="mdl-layout mdl-js-layout mdl-layout--fixed-header">
+      <!-- Header. -->
+      <header class="mdl-layout__header">
+        <div class="mdl-layout__header-row">
+          <!-- Title -->
+          <span class="mdl-layout-title">PROCESS WARP : log analyzer</span>
+          <!-- Add spacer, to align navigation to the right -->
+          <div class="mdl-layout-spacer"></div>
+          <!-- Navigation. We hide it in small screens. -->
+          <div class="mdl-textfield mdl-js-textfield">
+            <input class="mdl-textfield__input" type="text" id="keyword"/>
+          </div>
+          <a class="mdl-navigation__link" href="#" onclick="sendSelect();"><i class="material-icons">refresh</i></a>
+          <a class="mdl-navigation__link" href="#" onclick="sendDeleteAll();"><i class="material-icons">delete</i></a>
+        </div>
+      </header>
+      <main class="mdl-layout__content">
+        <div class="page-content">
+          <!-- Loading -->
+          <div id="loading">
+            <div class="mdl-spinner mdl-js-spinner is-active"></div>
+          </div>
+          <style>
+            #loading {
+              box-pack: center;
+              box-align: center;
+              display: -webkit-box;
+              display: box;
+              height: 100%;
+              position: fixed;
+              width: 100%;
+              z-index: 9;
+              -webkit-box-align: center;
+              -webkit-box-pack: center;
+            }
+          </style>
+          <!-- Body. -->
+          <div id="table-head" style="width:100%;">
+          </div>
+          <div id="table-dummy">&nbsp</div>
+          <div id="table-body" style="width:100%;">
+          </div>
+          <style>
+            #table-head {
+              background-color: white;
+              border-bottom: double 3px #000;
+              font-weight: bold;
+              position: fixed;
+              text-align: center;
+            }
+
+            #table-body {
+            }
+
+            .table-th {
+              border-left: solid 1px #000;
+              box-sizing: border-box;
+              display: inline-block;
+              margin: 0;
+              word-break: break-all;
+            }
+
+            .table-tr {
+              border-bottom: dotted 1px #000;
+              width: 100%;
+            }
+
+            .table-td {
+              border-left: solid 1px #000;
+              box-sizing: border-box;
+              display: inline-block;
+              margin: 0;
+              padding: 2px;
+              vertical-align: top;
+              word-break: break-all;
+            }
+
+            .highlight {
+              background: yellow;
+            }
+          </style>
+        </div>
+      </main>
+    </div>
+  </body>
+  <script>
+    var socket = io();
+    var pidNid = false;
+
+    function recvPidNid(data) {
+      pidNid = data;
+      $('#loading').hide();
+    }
+
+    function recvResult(data) {
+      var nids = [];
+      Object.keys(pidNid).forEach(function(pid, idx) {
+        var nid = pidNid[pid];
+        if (nids.indexOf(nid) === -1) {
+          nids.push(nid);
+        }
+      });
+      nids = nids.sort();
+
+      var showData = {};
+      nids.forEach(function(nid) {
+        showData[nid] = [];
+      });
+
+      var packets = {};
+      data.forEach(function(val, idx) {
+        var pid = val.record.pid;
+        var nid = pidNid[pid];
+
+        if (val.record.mid === 'L3011') {
+          var groups = val.record.message.match(/relay packet_id=([^ ]*) command=([^ ]*) mode=([^ ]*) dst_module=([^ ]*) src_module=([^ ]*) pid=([^ ]*) dst_nid=([^ ]*)\[([^ ]*)\] src_nid=([^ ]*)\[([^ ]*)\]/);
+          val.packetId = groups[1];
+          val.command = groups[2];
+          // var mode = groups[3];
+          // var dstModule = groups[4];
+          // var srcModule = groups[5];
+          // var pid = groups[6];
+          val.dstNid1 = groups[7];
+          val.dstNid2 = groups[8];
+          val.srcNid1 = groups[9];
+          val.srcNid2 = groups[10];
+          val.nid = nid;
+
+          if (val.srcNid2 === '.' && val.dstNid2 !== '.') {
+            if (val.packetId + val.command in packets) {
+              val.isRetry = true;
+              packets[val.packetId + val.command].hasRetry = true;
+            } else {
+              packets[val.packetId + val.command] = val;
+            }
+          }
+          val.isRecv = (val.dstNid2 === '.' && val.srcNid2 !== '.');
+        }
+
+        showData[nid].push(val);
+      });
+
+      var idx = 0;
+      while (true) {
+        var isFinish = true;
+        nids.forEach(function(nid) {
+          if (showData[nid].length > idx) {
+            var val = showData[nid][idx];
+            if (val.record.mid === 'L3011' && val.isRecv && (val.packetId + val.command in packets)) {
+              var valSend = packets[val.packetId + val.command];
+              var idxSend = showData[valSend.nid].indexOf(valSend);
+              if (idxSend > idx) {
+                showData[nid].splice(idx, 0, null);
+              }
+            }
+            isFinish = false;
+          }
+        });
+        if (isFinish) break;
+        idx ++;
+      }
+
+      show(nids, showData);
+      $('#loading').hide();
+    }
+
+    function sendDeleteAll() {
+      socket.emit('delete all');
+    }
+
+    function sendSelect() {
+      $('#loading').show();
+      socket.emit('select', {
+        keyword: $('#keyword').val().split(/\s+/)
+      });
+    }
+
+    function show(nids, data) {
+      // regex for highlight
+      var re = new RegExp($('#keyword').val().split(/\s+/).join('|'), 'g');
+
+      var head = $('#table-head');
+      var body = $('#table-body');
+
+      head.empty();
+      body.empty();
+
+      nids.forEach(function(nid, idx) {
+        var th = $('<div/>').text(nid);
+        th.addClass('table-th');
+        th.css('width', (100 / nids.length) + '%');
+        head.append(th);
+      });
+
+      var idx = 0;
+      while (true) {
+        var isExist = false;
+        var tr = $('<div/>');
+        tr.addClass('table-tr');
+        nids.forEach(function(nid) {
+          var td = $('<div/>');
+          td.addClass('table-td');
+          td.css('width', (100 / nids.length) + '%');
+          
+          if (nid in data && idx in data[nid] && data[nid][idx] !== null) {
+            isExist = true;
+            td.text(data[nid][idx].record.message);
+            td.html(td.html().replace(re, '<span class="highlight">$&</span>'));
+          } else {
+            td.text(' ');
+          }
+          tr.append(td);
+        });
+
+        if (isExist) {
+          body.append(tr);
+          var h = tr.height();
+          tr.children().css('height', h + 'px');
+
+        } else {
+          break;
+        }
+        idx ++;
+      }
+    }
+
+    socket.on('result', recvResult);
+    socket.on('pid nid', recvPidNid);
+
+    socket.emit('select pid nid');
+    $('#loading').show();
+  </script>
+</html>
